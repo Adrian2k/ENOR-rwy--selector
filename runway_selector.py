@@ -164,12 +164,12 @@ IGNORED_AIRPORTS = {
 
 def get_engm_config() -> Tuple[List[str], str]:
     print("\nENGM Runway Configuration:")
-    print("1. 19 MPO (Mixed Operations)")
-    print("2. 01 MPO (Mixed Operations)")
-    print("3. 19 Segregated (19L Departures, 19R Arrivals)")
-    print("4. 01 Segregated (01L Departures, 01R Arrivals)")
-    print("5. 19 Single (19R only)")
-    print("6. 01 Single (01L only)")
+    print("1. 19 MPO (Mixed Parallel Operations)")
+    print("2. 01 MPO (Mixed Parallel Operations)")
+    print("3. 19 SPO (Segregated Parallel Operations - 19L DEP, 19R ARR)")
+    print("4. 01 SPO (Segregated Parallel Operations - 01L DEP, 01R ARR)")
+    print("5. 19 SRO (Single Runway Operations - 19R)")
+    print("6. 01 SRO (Single Runway Operations - 01L)")
     
     while True:
         try:
@@ -179,17 +179,53 @@ def get_engm_config() -> Tuple[List[str], str]:
                     return ['19L', '19R'], "MPO"
                 elif choice == '2':  # 01 MPO
                     return ['01L', '01R'], "MPO"
-                elif choice == '3':  # 19 Segregated
-                    return ['19L', '19R'], "SEG"
-                elif choice == '4':  # 01 Segregated
-                    return ['01L', '01R'], "SEG"
-                elif choice == '5':  # 19 Single
-                    return ['19R'], "SINGLE"
-                else:  # 01 Single
-                    return ['01L'], "SINGLE"
+                elif choice == '3':  # 19 SPO
+                    return ['19L', '19R'], "SPO"
+                elif choice == '4':  # 01 SPO
+                    return ['01L', '01R'], "SPO"
+                elif choice == '5':  # 19 SRO
+                    return ['19R'], "SRO"
+                else:  # 01 SRO
+                    return ['01L'], "SRO"
         except ValueError:
             pass
         print("Invalid choice. Please enter a number between 1 and 6.")
+
+def update_engm_runways(filename: str, runways: List[str], mode: str):
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+    
+    # Find the ENGM lines
+    arr_line_idx = None
+    dep_line_idx = None
+    for i, line in enumerate(lines):
+        if line.startswith('ENGM_ARR'):
+            arr_line_idx = i
+        elif line.startswith('ENGM_DEP'):
+            dep_line_idx = i
+    
+    if arr_line_idx is not None and dep_line_idx is not None:
+        if mode == "SPO":
+            # For Segregated Parallel Operations:
+            # 19 config: 19R for arrivals, 19L for departures
+            # 01 config: 01R for arrivals, 01L for departures
+            if '19' in runways[0]:
+                lines[arr_line_idx] = f'ENGM_ARR:19R\n'
+                lines[dep_line_idx] = f'ENGM_DEP:19L\n'
+            else:
+                lines[arr_line_idx] = f'ENGM_ARR:01R\n'
+                lines[dep_line_idx] = f'ENGM_DEP:01L\n'
+        elif mode == "MPO":
+            # For Mixed Parallel Operations, both runways can be used for both operations
+            lines[arr_line_idx] = f'ENGM_ARR:{runways[0]},{runways[1]}\n'
+            lines[dep_line_idx] = f'ENGM_DEP:{runways[0]},{runways[1]}\n'
+        else:  # SRO
+            # Single Runway Operations uses the same runway for both
+            lines[arr_line_idx] = f'ENGM_ARR:{runways[0]}\n'
+            lines[dep_line_idx] = f'ENGM_DEP:{runways[0]}\n'
+        
+        with open(filename, 'w') as f:
+            f.writelines(lines)
 
 def select_runway(airport: str, runway_data: List[Runway], wind_data: dict) -> Tuple[str, str, bool]:
     message = ""
@@ -274,38 +310,6 @@ def select_runway(airport: str, runway_data: List[Runway], wind_data: dict) -> T
     message = f"Selected runway {best_runway} based on wind {wind_data['direction']}@{wind_data['speed']}KT"
     return best_runway, message, should_print
 
-def update_engm_runways(filename: str, runways: List[str], mode: str):
-    with open(filename, 'r') as f:
-        lines = f.readlines()
-    
-    # Create new content
-    new_lines = []
-    for line in lines:
-        if line.startswith('ACTIVE_RUNWAY:ENGM:'):
-            continue
-        new_lines.append(line)
-    
-    if mode == "MPO":
-        # Both runways used for both arrivals and departures
-        for runway in runways:
-            new_lines.append(f'ACTIVE_RUNWAY:ENGM:{runway}:1\n')
-            new_lines.append(f'ACTIVE_RUNWAY:ENGM:{runway}:0\n')
-    elif mode == "SEG":
-        # Left runway for departures, Right runway for arrivals
-        left_rwy = runways[0]  # xxL
-        right_rwy = runways[1]  # xxR
-        new_lines.append(f'ACTIVE_RUNWAY:ENGM:{left_rwy}:1\n')  # Departure on L
-        new_lines.append(f'ACTIVE_RUNWAY:ENGM:{right_rwy}:0\n')  # Arrival on R
-    else:  # SINGLE
-        # Only one runway used for both
-        runway = runways[0]
-        new_lines.append(f'ACTIVE_RUNWAY:ENGM:{runway}:1\n')
-        new_lines.append(f'ACTIVE_RUNWAY:ENGM:{runway}:0\n')
-    
-    # Write back to file
-    with open(filename, 'w') as f:
-        f.writelines(new_lines)
-
 def update_rwy_file(filename: str, airport: str, runway: str):
     with open(filename, 'r') as f:
         lines = f.readlines()
@@ -359,7 +363,7 @@ def main():
             for rwy_file in rwy_files:
                 if airport == 'ENGM' and isinstance(selected_runway, list):
                     # Special handling for ENGM when multiple runways are returned
-                    mode = "SEG" if "Segregated" in message else "MPO" if "MPO" in message else "SINGLE"
+                    mode = "SPO" if "Segregated" in message else "MPO" if "MPO" in message else "SRO"
                     update_engm_runways(rwy_file, selected_runway, mode)
                 else:
                     update_rwy_file(rwy_file, airport, selected_runway)
